@@ -54,7 +54,7 @@ class AdminClient(val time: Time,
       throw future.exception()
   }
 
-  private def sendAnyNode(api: ApiKeys, request: AbstractRequest): Struct = {
+  def sendAnyNode(api: ApiKeys, request: AbstractRequest): Struct = {
     bootstrapBrokers.foreach {
       case broker =>
         try {
