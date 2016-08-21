@@ -748,6 +748,9 @@ class KafkaApis(val requestChannel: RequestChannel,
       completeTopicMetadata.asJava,
       requestVersion
     )
+
+    trace("handleTopicMetadataRequest response :" + responseBody)
+
     requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, responseHeader, responseBody)))
   }
 

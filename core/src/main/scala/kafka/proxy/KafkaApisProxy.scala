@@ -108,9 +108,10 @@ class KafkaApisProxy(val requestChannel: RequestChannel,
     val metadataRequest = request.body.asInstanceOf[MetadataRequest]
     val requestVersion = request.header.apiVersion()
 
-    val response = proxyClient.sendAnyNode(ApiKeys.METADATA, metadataRequest)
+    val response = proxyClient.sendAnyNode(ApiKeys.METADATA, metadataRequest, requestVersion)
+    info("raw response: " + response)
     val responseBody = new MetadataResponse(response)
-    info("Respose : " + responseBody.topicMetadata())
+    info("Response : " + responseBody);
 //    trace("Sending topic metadata %s and brokers %s for correlation id %d to client %s".format(completeTopicMetadata.mkString(","),
 //      brokers.mkString(","), request.header.correlationId, request.header.clientId))
 

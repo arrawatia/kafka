@@ -96,7 +96,7 @@ public class ConsumerNetworkClient implements Closeable {
         return send(node, api, ProtoUtils.latestVersion(api.id), request);
     }
 
-    private RequestFuture<ClientResponse> send(Node node,
+    public RequestFuture<ClientResponse> send(Node node,
                                               ApiKeys api,
                                               short version,
                                               AbstractRequest request) {

@@ -27,7 +27,7 @@ import org.apache.kafka.common.errors.DisconnectException
 import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.network.Selector
 import org.apache.kafka.common.protocol.types.Struct
-import org.apache.kafka.common.protocol.{ApiKeys, Errors}
+import org.apache.kafka.common.protocol.{ProtoUtils, ApiKeys, Errors}
 import org.apache.kafka.common.requests._
 import org.apache.kafka.common.utils.{SystemTime, Time, Utils}
 import org.apache.kafka.common.{Cluster, Node, TopicPartition}
@@ -43,9 +43,17 @@ class AdminClient(val time: Time,
   private def send(target: Node,
                    api: ApiKeys,
                    request: AbstractRequest): Struct = {
+    return send(target, api,ProtoUtils.latestVersion(api.id),request )
+  }
+
+
+  private def send(target: Node,
+                   api: ApiKeys,
+                   version: Short,
+                   request: AbstractRequest): Struct = {
     var future: RequestFuture[ClientResponse] = null
 
-    future = client.send(target, api, request)
+    future = client.send(target, api, version, request)
     client.poll(future)
 
     if (future.succeeded())
@@ -55,10 +63,14 @@ class AdminClient(val time: Time,
   }
 
   def sendAnyNode(api: ApiKeys, request: AbstractRequest): Struct = {
+    return sendAnyNode(api, request, ProtoUtils.latestVersion(api.id))
+  }
+
+  def sendAnyNode(api: ApiKeys, request: AbstractRequest, version:Short): Struct = {
     bootstrapBrokers.foreach {
       case broker =>
         try {
-          return send(broker, api, request)
+          return send(broker, api, version, request)
         } catch {
           case e: Exception =>
             debug(s"Request $api failed against node $broker", e)
@@ -66,6 +78,8 @@ class AdminClient(val time: Time,
     }
     throw new RuntimeException(s"Request $api failed on brokers $bootstrapBrokers")
   }
+
+
 
   private def findCoordinator(groupId: String): Node = {
     val request = new GroupCoordinatorRequest(groupId)
