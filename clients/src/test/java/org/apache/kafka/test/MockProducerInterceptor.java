@@ -109,7 +109,7 @@ public class MockProducerInterceptor implements ClusterResourceListener, Produce
         ON_CLUSTER_UPDATE_COUNT.incrementAndGet();
         CLUSTER_META.set(clusterMetadata);
         EVENTS.incrementAndGet();
-
+        System.out.println("clusterMetadata = " + clusterMetadata);
     }
 
     public ClusterResource getClusterResource() {

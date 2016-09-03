@@ -331,6 +331,12 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             this.ioThread = new KafkaThread(ioThreadName, this.sender, true);
             this.ioThread.start();
 
+
+            int version = metadata.requestUpdate();
+            System.out.println(this + "Topics in metadata = " + metadata.topics());
+            sender.wakeup();
+            metadata.awaitUpdate(version, this.maxBlockTimeMs);
+
             this.errors = this.metrics.sensor("errors");
 
 
