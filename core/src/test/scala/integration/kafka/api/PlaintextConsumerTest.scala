@@ -14,27 +14,25 @@ package kafka.api
 
 
 import java.util
-import java.util.Properties
 import java.util.regex.Pattern
+import java.util.{Collections, Locale, Properties}
 
 import kafka.log.LogConfig
 import kafka.server.KafkaConfig
 import kafka.utils.TestUtils
 import org.apache.kafka.clients.consumer._
-import org.apache.kafka.clients.producer.KafkaProducer
-import org.apache.kafka.common.serialization.{ByteArraySerializer, StringDeserializer, StringSerializer}
-import org.apache.kafka.test.{MockConsumerInterceptor, MockProducerInterceptor}
-import org.apache.kafka.clients.producer.{ProducerConfig, ProducerRecord}
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
 import org.apache.kafka.common.TopicPartition
-import org.apache.kafka.common.errors.{InvalidTopicException}
+import org.apache.kafka.common.errors.InvalidTopicException
 import org.apache.kafka.common.record.{CompressionType, TimestampType}
-import org.apache.kafka.common.serialization.ByteArrayDeserializer
+import org.apache.kafka.common.serialization.{ByteArrayDeserializer, ByteArraySerializer, StringDeserializer, StringSerializer}
+import org.apache.kafka.common.utils.Utils
+import org.apache.kafka.test.{MockConsumerInterceptor, MockProducerInterceptor}
 import org.junit.Assert._
 import org.junit.Test
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.Buffer
-import java.util.Locale
 
 /* We have some tests in this class instead of `BaseConsumerTest` in order to keep the build time under control. */
 class PlaintextConsumerTest extends BaseConsumerTest {
@@ -79,6 +77,76 @@ class PlaintextConsumerTest extends BaseConsumerTest {
     consumer0.poll(0)
     assertEquals(2, listener.callsToAssigned)
     assertEquals(2, listener.callsToRevoked)
+  }
+
+  @Test
+  def testMaxPollIntervalMsDelayInRevocation() {
+    this.consumerConfig.setProperty(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 5000.toString)
+    this.consumerConfig.setProperty(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, 500.toString)
+    this.consumerConfig.setProperty(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 1000.toString)
+    this.consumerConfig.setProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false.toString)
+
+    val consumer0 = new KafkaConsumer(this.consumerConfig, new ByteArrayDeserializer(), new ByteArrayDeserializer())
+    consumers += consumer0
+
+    var commitCompleted = false
+    var committedPosition: Long = -1
+
+    val listener = new TestConsumerReassignmentListener {
+      override def onPartitionsRevoked(partitions: util.Collection[TopicPartition]): Unit = {
+        if (callsToRevoked > 0) {
+          // on the second rebalance (after we have joined the group initially), sleep longer
+          // than session timeout and then try a commit. We should still be in the group,
+          // so the commit should succeed
+          Utils.sleep(1500)
+          committedPosition = consumer0.position(tp)
+          consumer0.commitSync(Map(tp -> new OffsetAndMetadata(committedPosition)).asJava)
+          commitCompleted = true
+        }
+        super.onPartitionsRevoked(partitions)
+      }
+    }
+
+    consumer0.subscribe(List(topic).asJava, listener)
+
+    // poll once to join the group and get the initial assignment
+    consumer0.poll(0)
+
+    // force a rebalance to trigger an invocation of the revocation callback while in the group
+    consumer0.subscribe(List("otherTopic").asJava, listener)
+    consumer0.poll(0)
+
+    assertEquals(0, committedPosition)
+    assertTrue(commitCompleted)
+  }
+
+  @Test
+  def testMaxPollIntervalMsDelayInAssignment() {
+    this.consumerConfig.setProperty(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 5000.toString)
+    this.consumerConfig.setProperty(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, 500.toString)
+    this.consumerConfig.setProperty(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 1000.toString)
+    this.consumerConfig.setProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false.toString)
+
+    val consumer0 = new KafkaConsumer(this.consumerConfig, new ByteArrayDeserializer(), new ByteArrayDeserializer())
+    consumers += consumer0
+
+    val listener = new TestConsumerReassignmentListener {
+      override def onPartitionsAssigned(partitions: util.Collection[TopicPartition]): Unit = {
+        // sleep longer than the session timeout, we should still be in the group after invocation
+        Utils.sleep(1500)
+        super.onPartitionsAssigned(partitions)
+      }
+    }
+    consumer0.subscribe(List(topic).asJava, listener)
+
+    // poll once to join the group and get the initial assignment
+    consumer0.poll(0)
+
+    // we should still be in the group after this invocation
+    consumer0.poll(0)
+
+    assertEquals(1, listener.callsToAssigned)
+    assertEquals(1, listener.callsToRevoked)
   }
 
   @Test
@@ -970,6 +1038,84 @@ class PlaintextConsumerTest extends BaseConsumerTest {
     assertEquals(2, topics.get(topic1).size)
     assertEquals(2, topics.get(topic2).size)
     assertEquals(2, topics.get(topic3).size)
+  }
+
+  @Test
+  def testOffsetsForTimes() {
+    val numParts = 2
+    val topic1 = "part-test-topic-1"
+    val topic2 = "part-test-topic-2"
+    val topic3 = "part-test-topic-3"
+    val props = new Properties()
+    props.setProperty(LogConfig.MessageFormatVersionProp, "0.9.0")
+    TestUtils.createTopic(this.zkUtils, topic1, numParts, 1, this.servers)
+    // Topic2 is in old message format.
+    TestUtils.createTopic(this.zkUtils, topic2, numParts, 1, this.servers, props)
+    TestUtils.createTopic(this.zkUtils, topic3, numParts, 1, this.servers)
+
+    val consumer = this.consumers.head
+
+    // Test negative target time
+    intercept[IllegalArgumentException](
+      consumer.offsetsForTimes(Collections.singletonMap(new TopicPartition(topic1, 0), -1)))
+
+    val timestampsToSearch = new util.HashMap[TopicPartition, java.lang.Long]()
+    var i = 0
+    for (topic <- List(topic1, topic2, topic3)) {
+      for (part <- 0 until numParts) {
+        val tp = new TopicPartition(topic, part)
+        // In sendRecords(), each message will have key, value and timestamp equal to the sequence number.
+        sendRecords(100, tp)
+        timestampsToSearch.put(tp, i * 20)
+        i += 1
+      }
+    }
+    // The timestampToSearch map should contain:
+    // (topic1Partition0 -> 0,
+    //  topic1Partitoin1 -> 20,
+    //  topic2Partition0 -> 40,
+    //  topic2Partition1 -> 60,
+    //  topic3Partition0 -> 80,
+    //  topic3Partition1 -> 100)
+    val timestampOffsets = consumer.offsetsForTimes(timestampsToSearch)
+    assertEquals(0, timestampOffsets.get(new TopicPartition(topic1, 0)).offset())
+    assertEquals(0, timestampOffsets.get(new TopicPartition(topic1, 0)).timestamp())
+    assertEquals(20, timestampOffsets.get(new TopicPartition(topic1, 1)).offset())
+    assertEquals(20, timestampOffsets.get(new TopicPartition(topic1, 1)).timestamp())
+    assertEquals("null should be returned when message format is 0.9.0",
+      null, timestampOffsets.get(new TopicPartition(topic2, 0)))
+    assertEquals("null should be returned when message format is 0.9.0",
+      null, timestampOffsets.get(new TopicPartition(topic2, 1)))
+    assertEquals(80, timestampOffsets.get(new TopicPartition(topic3, 0)).offset())
+    assertEquals(80, timestampOffsets.get(new TopicPartition(topic3, 0)).timestamp())
+    assertEquals(null, timestampOffsets.get(new TopicPartition(topic3, 1)))
+  }
+
+  @Test
+  def testEarliestOrLatestOffsets() {
+    val topic0 = "topicWithNewMessageFormat"
+    val topic1 = "topicWithOldMessageFormat"
+    createTopicAndSendRecords(topicName = topic0, numPartitions = 2, recordsPerPartition = 100)
+    val props = new Properties()
+    props.setProperty(LogConfig.MessageFormatVersionProp, "0.9.0")
+    TestUtils.createTopic(this.zkUtils, topic1, numPartitions = 1, replicationFactor = 1, this.servers, props)
+    sendRecords(100, new TopicPartition(topic1, 0))
+
+    val t0p0 = new TopicPartition(topic0, 0)
+    val t0p1 = new TopicPartition(topic0, 1)
+    val t1p0 = new TopicPartition(topic1, 0)
+    val partitions = Set(t0p0, t0p1, t1p0).asJava
+    val consumer = this.consumers.head
+
+    val earliests = consumer.beginningOffsets(partitions)
+    assertEquals(0L, earliests.get(t0p0))
+    assertEquals(0L, earliests.get(t0p1))
+    assertEquals(0L, earliests.get(t1p0))
+
+    val latests = consumer.endOffsets(partitions)
+    assertEquals(100L, latests.get(t0p0))
+    assertEquals(100L, latests.get(t0p1))
+    assertEquals(100L, latests.get(t1p0))
   }
 
   @Test
