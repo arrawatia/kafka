@@ -16,8 +16,10 @@
  */
 package org.apache.kafka.test;
 
+import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.common.ClusterResourceListener;
 import org.apache.kafka.common.ClusterResource;
+import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.serialization.Serializer;
 
 import java.util.Map;
@@ -37,6 +39,10 @@ public class MockSerializer implements ClusterResourceListener, Serializer<byte[
 
     @Override
     public void configure(Map<String, ?> configs, boolean isKey) {
+        // clientId must be in configs
+        Object clientIdValue = configs.get(CommonClientConfigs.CLIENT_ID_CONFIG);
+        if (clientIdValue == null)
+            throw new ConfigException("Mock serializer expects configuration " + CommonClientConfigs.CLIENT_ID_CONFIG);
     }
 
     @Override

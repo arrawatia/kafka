@@ -16,6 +16,8 @@
  */
 package org.apache.kafka.test;
 
+import org.apache.kafka.clients.CommonClientConfigs;
+import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.metrics.KafkaMetric;
 import org.apache.kafka.common.metrics.MetricsReporter;
 
@@ -26,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class MockMetricsReporter implements MetricsReporter {
     public static final AtomicInteger INIT_COUNT = new AtomicInteger(0);
     public static final AtomicInteger CLOSE_COUNT = new AtomicInteger(0);
+    public static final String BROKER_ID_PROP = "broker.id";
 
     public MockMetricsReporter() {
     }
@@ -48,5 +51,12 @@ public class MockMetricsReporter implements MetricsReporter {
 
     @Override
     public void configure(Map<String, ?> configs) {
+        // clientId must be in configs for clients
+        if (configs.get(BROKER_ID_PROP) == null) {
+            Object clientIdValue = configs.get(CommonClientConfigs.CLIENT_ID_CONFIG);
+            if (clientIdValue == null)
+                throw new ConfigException("Mock metrics interceptor expects configuration " + CommonClientConfigs.CLIENT_ID_CONFIG);
+
+        }
     }
 }
